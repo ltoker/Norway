@@ -27,15 +27,13 @@ geneNames <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id", "gene_biotyp
 
 MitoGenes <- geneNames[grepl("MT-", geneNames$hgnc_symbol),]
 
-Metadata <- read.table("mapping_ids.csv", header = T, sep = "\t")
-
-Meta <- read.table("mapping_ids.csv", header = T, sep = "\t")
+Meta <- read.table(paste0(name, "/meta/mapping_ids.csv"), header = T, sep = "\t")
 Meta$Series_sample_id <- Meta$RNA2
-Meta2 <- read.table("clinical_data.csv", header = T, sep = "\t")
+Meta2 <- read.table(paste0(name, "meta/clinical_data.csv"), header = T, sep = "\t")
 
 Metadata <- merge(Meta, Meta2 %>% select(-condition), by.x = "RNA2", by.y = "sample_id", all.x = F, all.y = F)
 Metadata <- Metadata[!grepl("child", Metadata$condition, ignore.case = T),]
-write.table(Metadata," Metadata.tsv", sep = "\t", row.names = F)
+write.table(Metadata, paste0(name, "/meta/Metadata.tsv"), sep = "\t", row.names = F)
 
 Metadata$Profile <- sapply(Metadata$condition, function(x){
   x <- as.character(x)
