@@ -1,14 +1,14 @@
 
-GetMeta <- function(StudyName, subCol, Multi = "no", groups=TRUE){
-  if(length(list.files(name, pattern="Metadata.tsv")) == 0){
+GetMeta <- function(StudyName, subCol, Multi = "no", groups=TRUE, case = "PD"){
+  if(length(list.files(StudyName, pattern="Metadata.tsv")) == 0){
     if(length(list.files(path = paste0(StudyName,"/data"), pattern=".soft")) == 0){
       softDown(StudyName, paste0(StudyName, "/data/",paste0(StudyName, ".soft")))
     }
-    Metadata <- ReadSoft(paste0(name,"/data/", list.files(paste0(name,"/data/"), pattern=".soft")))
+    Metadata <- ReadSoft(paste0(name,"/data/", list.files(paste0(StudyName,"/data/"), pattern=".soft")))
     write.table(Metadata, paste0(name,"/Metadata.tsv"), sep="\t", row.names=FALSE)
   }
-  Metadata <- read.table(paste0(name,"/Metadata.tsv"), sep="\t", header=T)
-  names(Metadata)[grep("pmi|mortem", names(Metadata), ignore.case=TRUE)] <- "PMI"
+  Metadata <- read.table(paste0(StudyName,"/Metadata.tsv"), sep="\t", quote = '"', header=T)
+  names(Metadata)[grep("pmi|mortem|pm_time", names(Metadata), ignore.case=TRUE)] <- "PMI"
   names(Metadata)[grep("ph$|tissue.ph", names(Metadata), ignore.case=TRUE)] <- "pH"
   names(Metadata)[grep("^rin$", names(Metadata), ignore.case=TRUE)] <- "RIN"
   names(Metadata)[grep("^age$|age.*?death|age.*?year", names(Metadata), ignore.case=TRUE)] <- "Age"
@@ -22,8 +22,7 @@ GetMeta <- function(StudyName, subCol, Multi = "no", groups=TRUE){
   Metadata[grep("PMI|RIN|pH|Age|IQ$", names(Metadata))] <- apply(Metadata[grep("PMI|RIN|pH|Age|IQ$", names(Metadata))], 2, function(x){
     as.numeric(as.character(x))
   })
-      
-      
+  
   if(groups & sum(grepl("disease|diagnosis|phenotype|profile", tolower(names(Metadata)))) == 0){
     stop("No group information, modify Metadata file")
   } else if (groups & sum(grepl("disease|diagnosis|profile", tolower(names(Metadata)))) > 0){
@@ -37,21 +36,25 @@ GetMeta <- function(StudyName, subCol, Multi = "no", groups=TRUE){
         "SCZ"
       } else if (grepl("depres", tolower(x))){
         "MD"
+      }  else if (grepl("park|^pd", tolower(x))){
+        "PD"
+      }  else if (grepl("alz", tolower(x))){
+        "AD"
       } else if (grepl("asd|autism", tolower(x))){
         "ASD"
+      } else if(grepl("case", tolower(x))){
+        case
       } else {
         NA
       }
     }, simplify=TRUE) %>% factor
     
     
-    #remove MD subjects
-    Metadata %<>% filter(!is.na(Profile),  Profile != "MD") %>% droplevels()
-    Metadata <- Metadata[order(Metadata$Profile),]
-    
   } else {
     Metadata$Profile <- "Cont"
   }
+  
+  Metadata %<>% filter(!is.na(Profile)) %>% droplevels()
   
   OrgRegion <- grep("(tissue|region|brain.?region)", names(Metadata),ignore.case = TRUE, value = T)
   if(length(OrgRegion) == 0){
@@ -103,7 +106,7 @@ GetMeta <- function(StudyName, subCol, Multi = "no", groups=TRUE){
   if(name == "GSE28521"){
     source(paste0(ProjScriptPath, "GSE28521preProcess.R"), local = T)
   }
-  Metadata <- GetCommonName(Metadata, Multi = Multi, char=c("age", "sex", "PMI", "ph"))
+  Metadata <- GetCommonName(Metadata, Multi = Multi, char=c("Profile", "age", "sex", "PMI", "ph"))
     
   
   #If there are replicates, change their names accordngly
@@ -174,7 +177,6 @@ makeSet <- function(data, meta, name=NULL){
   if(is.null(rownames(expData))){
     rownames(expData) <- expData$Probe
   }
-  
   #Add the scan date to the meta file
   meta$ScanDate <- data$scanDate[pmatch(meta$Series_sample_id, names(data$scanDate))]
   
