@@ -29,7 +29,7 @@ MitoGenes <- geneNames[grepl("MT-", geneNames$hgnc_symbol),]
 
 Meta <- read.table(paste0(name, "/meta/mapping_ids.csv"), header = T, sep = "\t")
 Meta$Series_sample_id <- Meta$RNA2
-Meta2 <- read.table(paste0(name, "meta/clinical_data.csv"), header = T, sep = "\t")
+Meta2 <- read.table(paste0(name, "/meta/clinical_data.csv"), header = T, sep = "\t")
 
 Metadata <- merge(Meta, Meta2 %>% select(-condition), by.x = "RNA2", by.y = "sample_id", all.x = F, all.y = F)
 Metadata <- Metadata[!grepl("child", Metadata$condition, ignore.case = T),]
@@ -55,8 +55,8 @@ Metadata$OrgRegion = factor("Cortex")
 Metadata %<>% mutate(NeuExpRegion = OrgRegion,
                      Filename = RNA2,
                      Series_sample_id = RNA2,
-                     #Batch = lane,
                      Study = "Parkome")
+
 
 #Get the count matrix and filter mitochondrial genes
 countMatrix <- read.csv(paste0(name, "/data/countMatrix.genes"), header=TRUE, sep = "\t")
@@ -476,21 +476,21 @@ for(study in names(studyFinal)){
 }
 
 #Print MGP plots
-sapply(names(studyFinal), function(stdName){
-  if(!stdName %in% list.dirs(name, full.names = FALSE)){
-    dir.create(paste0(name,"/", stdName))
-  }
-  meta <- studyFinal[[stdName]]$Metadata
-  meta <- meta[apply(meta, 2, function(x) sum(!is.na(x))) > 0]
-  names(meta) <- sapply(names(meta), function(x) gsub(" ", "_", x))
-  sapply(grep("_Genes", names(meta), value = TRUE), function(mgp){
-    temp <- PlotPCggplot(data=meta, CellVar = mgp,
-                         name = paste(name, stdName, sep = "-"), txtSize = 16, pValSize = )
-    ggsave(paste0(name,"/", stdName, "/", gsub("Genes", "MGP", mgp), ".pdf"),
-           plot = temp, width = 12, height = 8, units = "in",
-           dpi=300)
-  })
-})
+# sapply(names(studyFinal), function(stdName){
+#   if(!stdName %in% list.dirs(name, full.names = FALSE)){
+#     dir.create(paste0(name,"/", stdName))
+#   }
+#   meta <- studyFinal[[stdName]]$Metadata
+#   meta <- meta[apply(meta, 2, function(x) sum(!is.na(x))) > 0]
+#   names(meta) <- sapply(names(meta), function(x) gsub(" ", "_", x))
+#   sapply(grep("_Genes", names(meta), value = TRUE), function(mgp){
+#     temp <- PlotPCggplot(data=meta, CellVar = mgp,
+#                          name = paste(name, stdName, sep = "-"), txtSize = 16, pValSize = )
+#     ggsave(paste0(name,"/", stdName, "/", gsub("Genes", "MGP", mgp), ".pdf"),
+#            plot = temp, width = 12, height = 8, units = "in",
+#            dpi=300)
+#   })
+# })
 
 rm(AllsampleData, AllNames, CountData, countMatrix, cpmMatrix, cpmMatrixFiltered, datas, ensembl,
    estimates, ExpDataCPM, geneNames, GeneSymbolAll, Meta, Meta2, missmatched,
@@ -502,5 +502,11 @@ save.image(paste0(GeneralResultsPath, name, ".RData"))
 save(studyFinal, file = paste0(GeneralResultsPath, "studyFinal", name, ".rda"))
 save(PCA_results, file = paste0(GeneralResultsPath, "PCAresults", name, ".Rda"))
 
+ggplot(studyFinal$Cortex$Metadata, aes(Profile, Oligo_Genes)) +
+  theme_classic() +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.2) +
+  facet_wrap(~cohort)
+
 #Run DE analysis
-#source(paste0(ProjScriptPath, "DESeqAnalysis.R"))
+source(paste0(ProjScriptPath, "DESeqAnalysis.R"))

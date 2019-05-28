@@ -111,7 +111,8 @@ CompareResultsAll <- function(data1, data2, name1 = "NBB", name2 = "Norway", col
                aes_string(CompareCol[1], CompareCol[2],  color = "Cohort"),
                inherit.aes = FALSE) +
     geom_hline(yintercept = 0) +
-    geom_vline(xintercept = 0)
+    geom_vline(xintercept = 0) +
+    geom_density2d()
 }
 
 GetAdjCountDESeq <- function(dds, Gene,  adjCov){

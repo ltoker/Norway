@@ -6,8 +6,9 @@ load(paste0(GeneralResultsPath, "Parkome.RData"))
 
 studyFinal$Cortex$Metadata$age_years <- as.numeric(studyFinal$Cortex$Metadata$age_years)
 studyFinal$Cortex$Metadata$PMI_hours <- as.numeric(studyFinal$Cortex$Metadata$pm_time_min)/60
+studyFinal$Cortex$Metadata$Batch <- factor(studyFinal$Cortex$Metadata$Batch)
 
-MetaCovar = "sex + age_years + rin + PMI_hours"
+MetaCovar = "sex + age_years + rin + PMI_hours + Batch"
 Model = as.formula(paste0("~Profile + cohort +", MetaCovar))
 
 source("ProjectScripts/ProjectFunctions.R")
@@ -139,9 +140,11 @@ rm(datas, cpmCountFiltered, cpmCountFiltered, ensembl, estimates, ExpDataAll, Ex
 save.image(file = paste0(GeneralResultsPath, "DESeqAnalysisParkome.Rdata"))
 
 
-AdjCovar <- data.frame(Cov = c("sex_M_vs_F","age_years","PMI_hours", "rin",
+AdjCovar <- data.frame(Cov = c("sex_M_vs_F", 
+                               "Batch_2_vs_1", "Batch_3_vs_1", "Batch_4_vs_1",
+                               "age_years","PMI_hours", "rin",
                                "Oligo_Genes"),
-                       adjType = c("base", rep("mean", 4)))
+                       adjType = c(rep("base", 4), rep("mean", 4)))
 PTPRH_PV <- plotCounts(DESeqOut_Norway_Olig, gene = "ENSG00000080031", intgroup = "condition", returnData = T) %>% data.frame
 PTPRH_PV %<>% mutate(AdjPTPRH_Olig = GetAdjCountDESeq(dds = DESeqOut_Norway_Olig, Gene = "ENSG00000080031", adjCov = AdjCovar),
                      AdjPTPRH = GetAdjCountDESeq(dds = DESeqOut_Norway, Gene = "ENSG00000080031", adjCov = AdjCovar %>% filter(Cov != "Oligo_Genes")),
@@ -149,6 +152,11 @@ PTPRH_PV %<>% mutate(AdjPTPRH_Olig = GetAdjCountDESeq(dds = DESeqOut_Norway_Olig
                      RNA2 = rownames(attr(DESeqOut_Norway_Olig, "modelMatrix")),
                      Cohort = "PV")
 
+AdjCovar <- data.frame(Cov = c("sex_M_vs_F", "Batch_1_vs_0",
+                               "Batch_2_vs_0", "Batch_3_vs_0", "Batch_4_vs_0",
+                               "age_years","PMI_hours", "rin",
+                               "Oligo_Genes"),
+                       adjType = c(rep("base", 5), rep("mean", 4)))
 PTPRH_NBB <- plotCounts(DESeqOut_NBB_Olig, gene = "ENSG00000080031", intgroup = "condition", returnData = T) %>% data.frame
 PTPRH_NBB %<>% mutate(AdjPTPRH_Olig = GetAdjCountDESeq(dds = DESeqOut_NBB_Olig, Gene = "ENSG00000080031", adjCov = AdjCovar),
                      AdjPTPRH = GetAdjCountDESeq(dds = DESeqOut_NBB, Gene = "ENSG00000080031", adjCov = AdjCovar %>% filter(Cov != "Oligo_Genes")),
@@ -170,5 +178,5 @@ Plot <- ggplot(PTPRH_both, aes(condition, PTPRHcount, color = condition)) +
   scale_color_manual(values =  c("dodgerblue4", "chocolate1"), name = "Group") +
   scale_fill_manual(values =  c("dodgerblue4", "chocolate1"), name = "Group") +
   facet_grid(CountType~Cohort, scales = "free_y")
-ggsave("PTPRHgeneLevels.pdf", plot = Plot, device = "pdf", width =  7, height =3, dpi = 300, useDingbats=F)
+ggsave("PTPRHgeneLevels.pdf", plot = Plot, device = "pdf", width =  7, height =5, dpi = 300, useDingbats=F)
 write.table(PTPRH_both, file = "PTPRH_bothCohorts.tsv", row.names = F, col.names = T, sep = "\t")
