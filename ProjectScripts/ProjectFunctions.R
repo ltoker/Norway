@@ -1,6 +1,13 @@
 packageF("biomaRt")
 ensembl <- useMart(biomart = "ensembl", dataset="hsapiens_gene_ensembl")
-geneNames <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id", "gene_biotype"), mart = ensembl)
+geneNames <- getBM(attributes = c("hgnc_symbol", "uniprot_gn_symbol", "ensembl_gene_id", "gene_biotype"), mart = ensembl)
+geneNames$hgnc_symbol <- apply(geneNames, 1, function(gene){
+  if(gene[1] == ""){
+    gene[2]
+  } else {
+    gene[1]
+  }
+})
 
 
 if(!"ermineR" %in% rownames(installed.packages())){
@@ -14,7 +21,9 @@ GenericHumanAnno <-  GetAnnoFiles("Generic_human")
 
 DESeq2RUN <- function(data, Meta, model){
   DESeqDS <- DESeqDataSetFromMatrix(countData = data, colData = Meta, design = model)
-  DESeqOut <- DESeq(DESeqDS)
+  DESeqDS <- estimateSizeFactors(DESeqDS, controlGenes = rownames(data) %in% HouseKeeping)
+  DESeqDS <- estimateDispersions(DESeqDS)
+  DESeqOut <- nbinomWaldTest(DESeqDS)
   return(DESeqOut)
 }
 
@@ -70,7 +79,6 @@ CompareResults <- function(data1, data2, name1 = "NBB", name2 = "Norway", colorC
       name2
     }
   }) %>% factor
-  
   CompareCol <- grep("log2FoldChange", names(UnionSignif), value = T)
   ggplot(UnionSignif, aes_string(CompareCol[1], CompareCol[2], color = colorCol)) +
     theme_classic() +
@@ -101,7 +109,7 @@ CompareResultsAll <- function(data1, data2, name1 = "NBB", name2 = "Norway", col
       "NS"
     }
   }) %>% factor
-  
+
   CompareCol <- grep("log2FoldChange", names(UnionSignif), value = T)
   ggplot(UnionSignif, aes_string(CompareCol[1], CompareCol[2])) +
     theme_classic() +

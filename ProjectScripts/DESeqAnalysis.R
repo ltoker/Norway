@@ -4,179 +4,210 @@ packageF("DESeq2")
 name = "Parkome"
 load(paste0(GeneralResultsPath, "Parkome.RData"))
 
-studyFinal$Cortex$Metadata$age_years <- as.numeric(studyFinal$Cortex$Metadata$age_years)
-studyFinal$Cortex$Metadata$PMI_hours <- as.numeric(studyFinal$Cortex$Metadata$pm_time_min)/60
-studyFinal$Cortex$Metadata$Batch <- factor(studyFinal$Cortex$Metadata$Batch)
+HouseKeeping <- c(as.character(VarAllNBB %>% head(5) %>% .$EnsemblID), as.character(VarAllPV %>% head(5) %>% .$EnsemblID))
 
 MetaCovar = "sex + age_years + rin + PMI_hours + Batch"
-Model = as.formula(paste0("~Profile + cohort +", MetaCovar))
+Model = as.formula(paste0("~Profile +", MetaCovar))
+
+Aspects = c("B", "M", "C")
 
 source("ProjectScripts/ProjectFunctions.R")
 
-#### Create DESeq compatible object
-CountsDESeq <- countMatrixFiltered
-CountsDESeq[,-1] <- apply(CountsDESeq[-1], c(1, 2), function(x) as.integer(round(x, digits = 0)))
-
-#Remove the samples identified as outliers
-CountsDESeq %<>% select_(.dots = c("genes", as.character(studyFinal$Cortex$Metadata$RNA2)))
-
-#Filter low expressed genes based on sex genes and excluding genes with low variance 
-CountsDESeq <- CountsDESeq[CountsDESeq$genes %in% studyFinal$Cortex$aned_high$ensemblID,]
-
-rownames(CountsDESeq) <- as.character(CountsDESeq$genes)
-
-#Run DESeq2 on both cohorts, withou MGP adjustment
-DESeqOutBoth <- DESeq2RUN(data =  CountsDESeq[-1], Meta = studyFinal$Cortex$Metadata, model = Model)
-DESeqResultsBoth <- GetDESeq2Results(DESeqOutBoth, coef = "Profile_PD_vs_Cont", alpha = 0.05, indepFilter = TRUE)
-
-DESeqResultsDF_Both <- GetOneSidedPval(ResultsObj = DESeqResultsBoth)
-EnrichListPDdown_Both <- gsr(scores = DESeqResultsDF_Both, scoreColumn = "DownPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = c("B", "M", "C"))
-EnrichListPDup_Both <- gsr(scores = DESeqResultsDF_Both, scoreColumn = "UpPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = c("B", "M", "C"))
+BeforeMGPcorrection <- lapply(studyFinal, function(Cohort){
+  Meta <- Cohort$Metadata 
+  Counts = Cohort$countMatrix[,-1]
+  DESeqOut <- DESeq2RUN(data =  Counts, Meta = Meta, model = Model)
+  DESeqResults <- GetDESeq2Results(DESeqOut, coef = "Profile_PD_vs_Cont", alpha = 0.05, indepFilter = TRUE)
+  DESeqResultsDF <- GetOneSidedPval(ResultsObj = DESeqResults)
+  EnrichListPDdown <- gsr(scores = DESeqResultsDF, scoreColumn = "DownPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = Aspects)
+  EnrichListPDup <- gsr(scores = DESeqResultsDF, scoreColumn = "UpPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = Aspects)
+  list(DESeqOut = DESeqOut,
+       DESeqResultsDF = DESeqResultsDF,
+       EnrichListPDdown = EnrichListPDdown,
+       EnrichListPDup = EnrichListPDup)
+})
 
 
-##### Repeat for each cohort separately
-## NBB
-Model2 = as.formula(paste0("~Profile + ", MetaCovar))
-MetaNBB <- studyFinal$Cortex$Metadata %>% filter(cohort == "NBB") %>% droplevels()
-CountsNBB = CountsDESeq %>% select_(.dots = as.character(MetaNBB$RNA2))
-
-DESeqOut_NBB <- DESeq2RUN(data =  CountsNBB, Meta = MetaNBB, model = Model2)
-DESeqResults_NBB <- GetDESeq2Results(DESeqOut_NBB, coef = "Profile_PD_vs_Cont", alpha = 0.05, indepFilter = TRUE)
-
-DESeqResultsDF_NBB <- GetOneSidedPval(ResultsObj = DESeqResults_NBB)
-EnrichListPDdown_NBB <- gsr(scores = DESeqResultsDF_NBB, scoreColumn = "DownPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = c("B", "M", "C"))
-EnrichListPDup_NBB <- gsr(scores = DESeqResultsDF_NBB, scoreColumn = "UpPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = c("B", "M", "C"))
-
-
-##Norway
-MetaNorway <- studyFinal$Cortex$Metadata %>% filter(cohort == "Norway") %>% droplevels()
-CountsNorway = CountsDESeq %>% select_(.dots = as.character(MetaNorway$RNA2))
-
-DESeqOut_Norway <- DESeq2RUN(data =  CountsNorway, Meta = MetaNorway, model = Model2)
-DESeqResults_Norway <- GetDESeq2Results(DESeqOut_Norway, coef = "Profile_PD_vs_Cont", alpha = 0.05, indepFilter = TRUE)
-
-DESeqResultsDF_Norway <- GetOneSidedPval(ResultsObj = DESeqResults_Norway)
-EnrichListPDdown_Norway <- gsr(scores = DESeqResultsDF_Norway, scoreColumn = "DownPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = c("B", "M", "C"))
-EnrichListPDup_Norway <- gsr(scores = DESeqResultsDF_Norway, scoreColumn = "UpPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = c("B", "M", "C"))
-
-
-MetaTemp = studyFinal$Cortex$Metadata
 #Repeat but correcting just for Oligo MGP
-OligModel <- "Oligo_Genes"
+OligModel <- as.formula(paste0("~Profile + ", MetaCovar, " + Oligo_Genes"))
+MicrogliaModel <- as.formula(paste0("~Profile + ", MetaCovar, " + Microglia_Genes"))
+OligMicrogliaModel <- as.formula(paste0("~Profile + ", MetaCovar, " + Microglia_Genes + Oligo_Genes"))
 
-Model2Olig <- as.formula(paste0("~Profile + ", MetaCovar, " + ", OligModel))
+AfterOligocorrection <- lapply(studyFinal, function(Cohort){
+  Meta <- Cohort$Metadata 
+  Counts = Cohort$countMatrix[,-1]
+  DESeqOut <- DESeq2RUN(data =  Counts, Meta = Meta, model = OligModel)
+  DESeqResults <- GetDESeq2Results(DESeqOut, coef = "Profile_PD_vs_Cont", alpha = 0.05, indepFilter = TRUE)
+  
+  DESeqResultsDF <- GetOneSidedPval(ResultsObj = DESeqResults)
+  EnrichListPDdown <- gsr(scores = DESeqResultsDF, scoreColumn = "DownPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = Aspects)
+  EnrichListPDup <- gsr(scores = DESeqResultsDF, scoreColumn = "UpPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = Aspects)
+  list(DESeqOut = DESeqOut,
+       DESeqResultsDF = DESeqResultsDF,
+       EnrichListPDdown = EnrichListPDdown,
+       EnrichListPDup = EnrichListPDup)
+})
 
-#Norway
-MetaNorwayOlig <- MetaTemp %>% filter(cohort == "Norway") %>% droplevels()
+AfterMicrogliacorrection <- lapply(studyFinal, function(Cohort){
+  Meta <- Cohort$Metadata 
+  Counts = Cohort$countMatrix[,-1]
+  DESeqOut <- DESeq2RUN(data =  Counts, Meta = Meta, model = MicrogliaModel)
+  DESeqResults <- GetDESeq2Results(DESeqOut, coef = "Profile_PD_vs_Cont", alpha = 0.05, indepFilter = TRUE)
+  
+  DESeqResultsDF <- GetOneSidedPval(ResultsObj = DESeqResults)
+  EnrichListPDdown <- gsr(scores = DESeqResultsDF, scoreColumn = "DownPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = Aspects)
+  EnrichListPDup <- gsr(scores = DESeqResultsDF, scoreColumn = "UpPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = Aspects)
+  list(DESeqOut = DESeqOut,
+       DESeqResultsDF = DESeqResultsDF,
+       EnrichListPDdown = EnrichListPDdown,
+       EnrichListPDup = EnrichListPDup)
+})
 
-DESeqOut_Norway_Olig <- DESeq2RUN(data =  CountsNorway, Meta = MetaNorwayOlig, model = Model2Olig)
-DESeqResults_Norway_Olig <- GetDESeq2Results(DESeqOut_Norway_Olig, coef = "Profile_PD_vs_Cont", alpha = 0.05, indepFilter = TRUE)
-
-DESeqResultsDF_Norway_Olig <- GetOneSidedPval(ResultsObj = DESeqResults_Norway_Olig)
-EnrichListPDdown_Norway_Olig <- gsr(scores = DESeqResultsDF_Norway_Olig, scoreColumn = "DownPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = c("B", "M", "C"))
-EnrichListPDup_Norway_Olig <- gsr(scores = DESeqResultsDF_Norway_Olig, scoreColumn = "UpPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = c("B", "M", "C"))
-
-#NBB
-MetaNBBOlig <- MetaTemp %>% filter(cohort == "NBB") %>% droplevels()
-
-DESeqOut_NBB_Olig <- DESeq2RUN(data =  CountsNBB, Meta = MetaNBBOlig, model = Model2Olig)
-DESeqResults_NBB_Olig <- GetDESeq2Results(DESeqOut_NBB_Olig, coef = "Profile_PD_vs_Cont", alpha = 0.05, indepFilter = TRUE)
-
-DESeqResultsDF_NBB_Olig <- GetOneSidedPval(ResultsObj = DESeqResults_NBB_Olig)
-EnrichListPDdown_NBB_Olig <- gsr(scores = DESeqResultsDF_NBB_Olig, scoreColumn = "DownPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = c("B", "M", "C"))
-EnrichListPDup_NBB_Olig <- gsr(scores = DESeqResultsDF_NBB_Olig, scoreColumn = "UpPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = c("B", "M", "C"))
-
-
-#Repeat but correcting just for General neuron MGP
-NeuronModel <- "NeuronAll_Genes"
-
-Model2Neuron <- as.formula(paste0("~Profile + ", MetaCovar, " + ", NeuronModel))
-
-#Norway
-MetaNorwayNeuron <- MetaTemp %>% filter(cohort == "Norway") %>% droplevels()
-
-DESeqOut_Norway_Neuron <- DESeq2RUN(data =  CountsNorway, Meta = MetaNorwayNeuron, model = Model2Neuron)
-DESeqResults_Norway_Neuron <- GetDESeq2Results(DESeqOut_Norway_Neuron, coef = "Profile_PD_vs_Cont", alpha = 0.05, indepFilter = TRUE)
-
-DESeqResultsDF_Norway_Neuron <- GetOneSidedPval(ResultsObj = DESeqResults_Norway_Neuron)
-EnrichListPDdown_Norway_Neuron <- gsr(scores = DESeqResultsDF_Norway_Neuron, scoreColumn = "DownPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = c("B", "M", "C"))
-EnrichListPDup_Norway_Neuron <- gsr(scores = DESeqResultsDF_Norway_Neuron, scoreColumn = "UpPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = c("B", "M", "C"))
-
-#NBB
-MetaNBBNeuron <- MetaTemp %>% filter(cohort == "NBB") %>% droplevels()
-
-DESeqOut_NBB_Neuron <- DESeq2RUN(data =  CountsNBB, Meta = MetaNBBNeuron, model = Model2Neuron)
-DESeqResults_NBB_Neuron <- GetDESeq2Results(DESeqOut_NBB_Neuron, coef = "Profile_PD_vs_Cont", alpha = 0.05, indepFilter = TRUE)
-
-DESeqResultsDF_NBB_Neuron <- GetOneSidedPval(ResultsObj = DESeqResults_NBB_Neuron)
-EnrichListPDdown_NBB_Neuron <- gsr(scores = DESeqResultsDF_NBB_Neuron, scoreColumn = "DownPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = c("B", "M", "C"))
-EnrichListPDup_NBB_Neuron <- gsr(scores = DESeqResultsDF_NBB_Neuron, scoreColumn = "UpPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = c("B", "M", "C"))
-
+AfterOligMicrogliacorrection <- lapply(studyFinal, function(Cohort){
+  Meta <- Cohort$Metadata 
+  Counts = Cohort$countMatrix[,-1]
+  DESeqOut <- DESeq2RUN(data =  Counts, Meta = Meta, model = OligMicrogliaModel)
+  DESeqResults <- GetDESeq2Results(DESeqOut, coef = "Profile_PD_vs_Cont", alpha = 0.05, indepFilter = TRUE)
+  
+  DESeqResultsDF <- GetOneSidedPval(ResultsObj = DESeqResults)
+  EnrichListPDdown <- gsr(scores = DESeqResultsDF, scoreColumn = "DownPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = Aspects)
+  EnrichListPDup <- gsr(scores = DESeqResultsDF, scoreColumn = "UpPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = Aspects)
+  list(DESeqOut = DESeqOut,
+       DESeqResultsDF = DESeqResultsDF,
+       EnrichListPDdown = EnrichListPDdown,
+       EnrichListPDup = EnrichListPDup)
+})
 #Compare results from both cohorts before Olig adjustment
-CompareResultsAll(data1 = DESeqResults_NBB, data2 = DESeqResults_Norway, name1 = "NBB",
+CompareResultsAll(data1 = BeforeMGPcorrection$NBB$DESeqResultsDF, data2 = BeforeMGPcorrection$Norway$DESeqResultsDF, name1 = "NBB",
                name2 = "Norway", colorCol = "Cohort",
-               Title = "Before Oligo correction, no pH correction")
+               Title = "Before Oligo correction")
 
 
 #Compare results from both cohorts after Olig adjustment
-CompareResultsAll(data1 = DESeqResults_NBB_Olig, data2 = DESeqResults_Norway_Olig, name1 = "NBB",
+CompareResultsAll(data1 = AfterOligMicrogliacorrection$NBB$DESeqResultsDF, data2 = AfterOligocorrection$Norway$DESeqResultsDF, name1 = "NBB",
                name2 = "Norway", colorCol = "Cohort",
-               Title = "After Oligo correction")
+               Title = "After Microglia/Oligo correction")
 
 
-
-#Rerun both cohorts, adjusting for Olig
-ModelOlig <- as.formula(paste0("~Profile + cohort + ", MetaCovar, " + ", OligModel))
-
-DESeqOutBoth_Olig <- DESeq2RUN(data =  CountsDESeq[-1], Meta = MetaTemp, model = ModelOlig)
-DESeqResultsBoth_Olig <- GetDESeq2Results(DESeqOutBoth_Olig, coef = "Profile_PD_vs_Cont", alpha = 0.05, indepFilter = TRUE)
-
-
-DESeqResultsDF_Both_Olig <- GetOneSidedPval(ResultsObj = DESeqResultsBoth_Olig)
-EnrichListPDdown_Both_Olig <- gsr(scores = DESeqResultsDF_Both_Olig, scoreColumn = "DownPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = c("B", "M", "C"))
-EnrichListPDup_Both_Olig <- gsr(scores = DESeqResultsDF_Both_Olig, scoreColumn = "UpPval", bigIsBetter = F, logTrans = T, annotation = GenericHumanAnno, aspects = c("B", "M", "C"))
 
 rm(datas, cpmCountFiltered, cpmCountFiltered, ensembl, estimates, ExpDataAll, ExpDataCPM)
+
+
+########Get adjusted log2 counts for genes #####################
+#Data from Dimitriu et al
+BeforeMGPcorrectionPA <- readRDS("GSE68719/GeneralResults/BeforeMGPcorrectionGSE68719.Rds")
+AfterMicrogliacorrectionPA <- readRDS("GSE68719/GeneralResults/AfterMicrogliacorrectionGSE68719.Rds")
+
+AdjCovarPV <- data.frame(Cov = c("sex_M_vs_F", 
+                                 "Batch_2_vs_1", "Batch_3_vs_1", "Batch_4_vs_1",
+                                 "age_years","PMI_hours", "rin",
+                                 "Oligo_Genes"),
+                         adjType = c(rep("base", 4), rep("mean", 4)))
+
+AdjCovarNBB <- data.frame(Cov = c("sex_M_vs_F", "Batch_1_vs_0",
+                                  "Batch_2_vs_0", "Batch_3_vs_0", "Batch_4_vs_0",
+                                  "age_years","PMI_hours", "rin",
+                                  "Oligo_Genes", "Microglia_Genes"),
+                          adjType = c(rep("base", 5), rep("mean", 5)))
+
+AdjCovarPA <- data.frame(Cov = c("Source_HBSFRC_vs_BSHRI", "Source_HBTRC_vs_BSHRI",
+                                 "Age","RIN", "PMI", "Microglia_Genes"),
+                         adjType = c(rep("base", 2), rep("mean", 4)))
+
+PlotAdjCounts <- function(Gene){
+  EnsemblID = BeforeMGPcorrection$Norway$DESeqResultsDF %>% filter(GeneSymbol == Gene) %>% .$EnsemblID
+  PV <- plotCounts(BeforeMGPcorrection$Norway$DESeqOut, gene = EnsemblID, intgroup = "Profile", returnData = T) %>% data.frame
+  PV %<>% mutate(Adj_MGP = GetAdjCountDESeq(dds = AfterOligocorrection$Norway$DESeqOut, Gene = EnsemblID, adjCov = AdjCovarPV),
+                       Adj = GetAdjCountDESeq(dds = BeforeMGPcorrection$Norway$DESeqOut, Gene = EnsemblID, adjCov = AdjCovarPV %>% filter(!Cov %in%  c("Oligo_Genes"))),
+                       count = log2(count),
+                       CommonName = rownames(attr(AfterOligocorrection$Norway$DESeqOut, "modelMatrix")),
+                       Cohort = "PW")
+  PV$RNA2 <- studyFinal$Norway$Metadata$RNA2[match(PV$CommonName, studyFinal$Norway$Metadata$CommonName)]
+  
+  
+  
+  NBB <- plotCounts(BeforeMGPcorrection$NBB$DESeqOut, gene = EnsemblID, intgroup = "Profile", returnData = T) %>% data.frame
+  NBB %<>% mutate(Adj_MGP = GetAdjCountDESeq(dds = AfterOligMicrogliacorrection$NBB$DESeqOut, Gene = EnsemblID, adjCov = AdjCovarNBB),
+                        Adj = GetAdjCountDESeq(dds = BeforeMGPcorrection$NBB$DESeqOut, Gene = EnsemblID, adjCov = AdjCovarNBB %>% filter(!Cov %in%  c("Oligo_Genes", "Microglia_Genes"))),
+                        count = log2(count),
+                        CommonName = rownames(attr(AfterOligMicrogliacorrection$NBB$DESeqOut, "modelMatrix")),
+                        Cohort = "NBB")
+  NBB$RNA2 <- studyFinal$NBB$Metadata$RNA2[match(NBB$CommonName, studyFinal$NBB$Metadata$CommonName)]
+  
+  
+  PA <- plotCounts(BeforeMGPcorrectionPA$Cortex$DESeqOut, gene = EnsemblID, intgroup = "Profile", returnData = T) %>% data.frame
+  PA %<>% mutate(Adj_MGP = GetAdjCountDESeq(dds = AfterMicrogliacorrectionPA$Cortex$DESeqOut, Gene = EnsemblID, adjCov = AdjCovarPA),
+                       Adj = GetAdjCountDESeq(dds = BeforeMGPcorrectionPA$Cortex$DESeqOut, Gene = EnsemblID, adjCov = AdjCovarPA %>% filter(!Cov %in%  c("Microglia_Genes"))),
+                       count = log2(count),
+                       CommonName = rownames(attr(AfterMicrogliacorrectionPA$Cortex$DESeqOut, "modelMatrix")),
+                       Cohort = "Dimitriu")
+  PA$RNA2 <- PA$CommonName
+  
+  
+  Gene_All <- rbind(PV, NBB, PA) %>% data.frame() %>% gather(key = "CountType", value = "GeneCount", Adj_MGP, Adj)
+  
+  Gene_All$condition <- relevel(Gene_All$Profile,ref = "Cont")
+  
+  levels(Gene_All$condition) <- c("Cont", "PD")
+  
+  Gene_All$CountType <- factor(Gene_All$CountType, levels = c("Adj", "Adj_MGP"))
+  levels(Gene_All$CountType) <- c("NotMGPAdjusted", "MGPAdjusted")
+  Gene_All$Cohort <- factor(Gene_All$Cohort, levels = c("PW", "NBB", "Dimitriu")) 
+  
+  Plot <- ggplot(Gene_All, aes(condition, GeneCount, color = condition)) +
+    theme_bw(base_size = 14) +
+    theme(panel.grid = element_blank()) +
+    labs(x = "", y = paste0("log2(",Gene, ")")) +
+    geom_boxplot(outlier.shape = NA, aes(fill = condition), alpha = 0.5) +
+    geom_jitter(width = 0.2) +
+    scale_color_manual(values =  c("dodgerblue4", "chocolate1"), name = "Group") +
+    scale_fill_manual(values =  c("dodgerblue4", "chocolate1"), name = "Group") +
+    facet_grid(CountType~Cohort, scales = "free_y")
+  ggsave(paste0(Gene,"geneLevels.pdf"), plot = Plot, device = "pdf", width =  7, height =5, dpi = 300, useDingbats=F)
+
+  Plot <- ggplot(Gene_All %>% filter(CountType == "MGPAdjusted"), aes(condition, GeneCount, color = condition)) +
+    theme_bw(base_size = 14) +
+    theme(panel.grid = element_blank()) +
+    labs(x = "", y = paste0("log2(",Gene, ")")) +
+    geom_boxplot(outlier.shape = NA, aes(fill = condition), alpha = 0.5) +
+    geom_jitter(width = 0.2) +
+    scale_color_manual(values =  c("dodgerblue4", "chocolate1"), name = "Group") +
+    scale_fill_manual(values =  c("dodgerblue4", "chocolate1"), name = "Group") +
+    facet_wrap(~Cohort, scales = "free")
+  ggsave(paste0(Gene,"geneLevelsMGPonly.pdf"), plot = Plot, device = "pdf", width =  7, height =3, dpi = 300, useDingbats=F)
+  print(Plot)
+}
+
+PlotAdjCounts("PTPRH")
+PlotAdjCounts("JUP")
+PlotAdjCounts("DLG2")
+PlotAdjCounts("KCNH1")
+PlotAdjCounts("MAP4K4")
+PlotAdjCounts("FRMD5")
+PlotAdjCounts("CNTNAP2")
+
+#Get the corrected counts for all genes
+AdjustedPV <- sapply(AfterOligocorrection$Norway$DESeqResultsDF$GeneSymbol, function(Gene){
+  EnsemblID = AfterOligocorrection$Norway$DESeqResultsDF %>% filter(GeneSymbol == Gene) %>% .$EnsemblID
+  GetAdjCountDESeq(dds = AfterOligocorrection$Norway$DESeqOut, Gene = EnsemblID, adjCov = AdjCovarPV)
+}) %>% t %>% data.frame
+
+sampleNamesPV <- rownames(attr(AfterOligocorrection$Norway$DESeqOut, "modelMatrix"))
+names(AdjustedPV) <- studyFinal$Norway$Metadata$RNA2[match(sampleNamesPV, studyFinal$Norway$Metadata$CommonName)]
+AdjustedPV %<>% mutate(GeneSymbol = rownames(.))
+
+
+AdjustedNBB <- sapply(AfterOligMicrogliacorrection$NBB$DESeqResultsDF$GeneSymbol, function(Gene){
+  EnsemblID = AfterOligMicrogliacorrection$NBB$DESeqResultsDF %>% filter(GeneSymbol == Gene) %>% .$EnsemblID
+  GetAdjCountDESeq(dds = AfterOligMicrogliacorrection$NBB$DESeqOut, Gene = EnsemblID, adjCov = AdjCovarNBB)
+}) %>% t %>% data.frame
+
+sampleNamesNBB <- rownames(attr(AfterOligMicrogliacorrection$NBB$DESeqOut, "modelMatrix"))
+names(AdjustedNBB) <- studyFinal$NBB$Metadata$RNA2[match(sampleNamesNBB, studyFinal$NBB$Metadata$CommonName)]
+AdjustedNBB %<>% mutate(GeneSymbol = rownames(.))
+
+saveRDS(list(AdjustedPV = AdjustedPV,
+             AdjustedNBB = AdjustedNBB), file = "AdjestedCounts.Rds")
+
+
 save.image(file = paste0(GeneralResultsPath, "DESeqAnalysisParkome.Rdata"))
-
-
-AdjCovar <- data.frame(Cov = c("sex_M_vs_F", 
-                               "Batch_2_vs_1", "Batch_3_vs_1", "Batch_4_vs_1",
-                               "age_years","PMI_hours", "rin",
-                               "Oligo_Genes"),
-                       adjType = c(rep("base", 4), rep("mean", 4)))
-PTPRH_PV <- plotCounts(DESeqOut_Norway_Olig, gene = "ENSG00000080031", intgroup = "condition", returnData = T) %>% data.frame
-PTPRH_PV %<>% mutate(AdjPTPRH_Olig = GetAdjCountDESeq(dds = DESeqOut_Norway_Olig, Gene = "ENSG00000080031", adjCov = AdjCovar),
-                     AdjPTPRH = GetAdjCountDESeq(dds = DESeqOut_Norway, Gene = "ENSG00000080031", adjCov = AdjCovar %>% filter(Cov != "Oligo_Genes")),
-                     count = log2(count),
-                     RNA2 = rownames(attr(DESeqOut_Norway_Olig, "modelMatrix")),
-                     Cohort = "PV")
-
-AdjCovar <- data.frame(Cov = c("sex_M_vs_F", "Batch_1_vs_0",
-                               "Batch_2_vs_0", "Batch_3_vs_0", "Batch_4_vs_0",
-                               "age_years","PMI_hours", "rin",
-                               "Oligo_Genes"),
-                       adjType = c(rep("base", 5), rep("mean", 4)))
-PTPRH_NBB <- plotCounts(DESeqOut_NBB_Olig, gene = "ENSG00000080031", intgroup = "condition", returnData = T) %>% data.frame
-PTPRH_NBB %<>% mutate(AdjPTPRH_Olig = GetAdjCountDESeq(dds = DESeqOut_NBB_Olig, Gene = "ENSG00000080031", adjCov = AdjCovar),
-                     AdjPTPRH = GetAdjCountDESeq(dds = DESeqOut_NBB, Gene = "ENSG00000080031", adjCov = AdjCovar %>% filter(Cov != "Oligo_Genes")),
-                     count = log2(count),
-                     RNA2 = rownames(attr(DESeqOut_NBB_Olig, "modelMatrix")),
-                     Cohort = "NBB")
-PTPRH_both <- rbind(PTPRH_PV, PTPRH_NBB) %>% data.frame() %>% gather(key = "CountType", value = "PTPRHcount", AdjPTPRH_Olig, AdjPTPRH)
-PTPRH_both$condition <- relevel(PTPRH_both$condition,ref = "Control")
-levels(PTPRH_both$condition) <- c("Cont", "PD")
-PTPRH_both$CountType <- factor(PTPRH_both$CountType, levels = c("AdjPTPRH", "AdjPTPRH_Olig"))
-levels(PTPRH_both$CountType) <- c("NotOligoAdjusted", "OligoAdjusted")
-
-Plot <- ggplot(PTPRH_both, aes(condition, PTPRHcount, color = condition)) +
-  theme_bw(base_size = 14) +
-  theme(panel.grid = element_blank()) +
-  labs(x = "", y = "log2(PTPRH)") +
-  geom_boxplot(outlier.shape = NA, aes(fill = condition), alpha = 0.5) +
-  geom_jitter(width = 0.2) +
-  scale_color_manual(values =  c("dodgerblue4", "chocolate1"), name = "Group") +
-  scale_fill_manual(values =  c("dodgerblue4", "chocolate1"), name = "Group") +
-  facet_grid(CountType~Cohort, scales = "free_y")
-ggsave("PTPRHgeneLevels.pdf", plot = Plot, device = "pdf", width =  7, height =5, dpi = 300, useDingbats=F)
-write.table(PTPRH_both, file = "PTPRH_bothCohorts.tsv", row.names = F, col.names = T, sep = "\t")

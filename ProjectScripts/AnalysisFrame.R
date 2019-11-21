@@ -1,5 +1,6 @@
 source("SetUp.R")
 packageF("biomaRt")
+packageF("tidyr")
 packageF("parallel")
 name = "Parkome"
 resultsPath = "GeneralResults"
@@ -11,20 +12,17 @@ Count2CPM <- function(countData){
   })
 }
 
-GeneTPM <- function(transData, mitoGenes = MitoGenes, rmGenes){
-  transData %<>% filter(!gene_id %in% c(mitoGenes$ensembl_gene_id, rmGenes))
-  transData %<>% mutate(RPK = 1000*expected_count/effective_length)
-  transData$RPK[is.infinite(transData$RPK)|is.na(transData$RPK)] <- 0
-  TotRPK = sum(transData$RPK)
-  transData %<>% mutate(TPM2 = (10^6)*RPK/TotRPK)
-  GeneData <- transData %>% group_by(gene_id) %>% summarise(geneTPM = sum(TPM2)) %>% data.frame()
-  return(GeneData)
-}
 
 ensembl <- useMart(biomart = "ensembl", dataset="hsapiens_gene_ensembl")
 
-geneNames <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id", "gene_biotype"), mart = ensembl)
-
+geneNames <- getBM(attributes = c("hgnc_symbol", "uniprot_gn_symbol", "ensembl_gene_id", "gene_biotype"), mart = ensembl)
+geneNames$hgnc_symbol <- apply(geneNames, 1, function(gene){
+  if(gene[1] == ""){
+    gene[2]
+  } else {
+    gene[1]
+  }
+})
 MitoGenes <- geneNames[grepl("MT-", geneNames$hgnc_symbol),]
 
 Meta <- read.table(paste0(name, "/meta/mapping_ids.csv"), header = T, sep = "\t")
@@ -61,312 +59,157 @@ Metadata %<>% mutate(NeuExpRegion = OrgRegion,
 #Get the count matrix and filter mitochondrial genes
 countMatrix <- read.csv(paste0(name, "/data/countMatrix.genes"), header=TRUE, sep = "\t")
 
-MaxSignal <- apply(countMatrix, 1, max)
-#countMatrix <- countMatrix[MaxSignal > 5,]
-
-
-CountSum <- apply(countMatrix %>% select(matches("SL")), 2, sum)
-
-MitoCountSum <- apply(countMatrix %>% filter(genes %in% MitoGenes$ensembl_gene_id) %>% select(matches("SL")), 2, sum)
-
-MitoCountFiltered <- countMatrix %>% filter(!genes %in% MitoGenes$ensembl_gene_id)
-
-MitoFiltCountSum = apply(MitoCountFiltered[-1], 2, sum)
-
-TopFiveProportion <- sapply(names(CountSum), function(sbj){
-  SubMatrix = countMatrix %>% select_(.dots = c("genes", sbj))
-  names(SubMatrix)[2] <- "Counts"
-  TopFive = SubMatrix %>% arrange(desc(Counts)) %>% head(5)
-  TopFive %<>%  mutate(Proportion = Counts/CountSum[sbj])
-  Genes <- geneNames[match(TopFive$genes, geneNames$ensembl_gene_id),]  %>% select(-ensembl_gene_id)
-  Genes$Filename = sbj
-  temp <- cbind(Genes, TopFive)
-  names(temp)[names(temp) == "genes"] <- "ensemblID"
-  temp
-}, simplify = FALSE) %>% rbindlist()
-
-TopFiveProportionNoMT <- sapply(names(CountSum), function(sbj){
-  SubMatrix = MitoCountFiltered %>% select_(.dots = c("genes", sbj))
-  names(SubMatrix)[2] <- "Counts"
-  TopFive = SubMatrix %>% arrange(desc(Counts)) %>% head(5)
-  TopFive %<>%  mutate(Proportion = Counts/MitoFiltCountSum[sbj])
-  Genes <- geneNames[match(TopFive$genes, geneNames$ensembl_gene_id),] %>% select(-ensembl_gene_id)
-  Genes$Filename = sbj
-  temp <- cbind(Genes, TopFive)
-  names(temp)[names(temp) == "genes"] <- "ensemblID"
-  temp
-}, simplify = FALSE) %>% rbindlist() %>% data.frame()
-
-TopFiveProportionNoMT <- merge(TopFiveProportionNoMT, geneNames, by.x = "ensemblID", by.y = "ensembl_gene_id", all.x = T, all.y = F)
-
-TopFiveSum <- TopFiveProportionNoMT %>% group_by(Filename) %>%
-  summarise(TotProp = sum(Proportion)) %>%
-  data.frame %>% arrange(TotProp)
-
-
-TopFiveGeneFreq <- TopFiveProportionNoMT %>% group_by(ensemblID) %>%
-  summarise(n = n()) %>%
-  data.frame
-
-TopFiveGeneFreq %<>% mutate(ensemblID2 = paste0(ensemblID, " (", n, ")"))
-TopFiveGeneFreq <- merge(TopFiveGeneFreq, geneNames[!duplicated(geneNames$ensembl_gene_id),], by.x = "ensemblID", by.y = "ensembl_gene_id", all.x = T, all.y = F)
-TopFiveGeneFreq %<>% arrange(n)
-
-TopFiveProportionNoMT$ensemblID2 <- TopFiveGeneFreq$ensemblID2[match(TopFiveProportionNoMT$ensemblID, TopFiveGeneFreq$ensemblID)]
-
-TopFiveProportionNoMT$Filename <- factor(TopFiveProportionNoMT$Filename, levels = TopFiveSum$Filename)
-TopFiveProportionNoMT$ensemblID2 <- factor(TopFiveProportionNoMT$ensemblID2, levels = TopFiveGeneFreq$ensemblID2)
-
-ggplot(TopFiveProportionNoMT, aes(Filename, Proportion, fill = ensemblID2)) +
-  theme_classic(base_size = 16) +
-  theme(axis.text.x = element_blank()) +
-  labs(y = "Proportion of reads", x = "Sample", title = "Top five genes with the highest read count") + 
-  scale_fill_manual(values = c(gray.colors(9), "brown1", "goldenrod3", "aquamarine4",
-                               "darkred", "cornflowerblue", "darksalmon" ),
-                    name = "GeneID (n)") +
-  geom_bar(stat = "identity")
-
-#Get the top expressed genes in each sample and the sum of their counts
-TopGenes <- sapply(grep("^SL", names(MitoCountFiltered), value = T), function(smpl){
-  TopFive <- MitoCountFiltered %>% arrange_(.dots = smpl) %>% tail(5)
-  TopFive %<>% select_(.dots = c("genes", smpl))
-  names(TopFive)[2] <- "Counts"
-  TopFive %>% arrange(desc(Counts))
-}, simplify = FALSE)
-
-TopFiveCount <- lapply(TopGenes, function(smpl){
-  sum(smpl$Counts)
-}) %>% unlist
-
-TopFiveNames <- lapply(TopGenes, function(smpl){
-  smpl$genes %>% as.character
-}) %>% unlist %>% data.frame()
-
-names(TopFiveNames) <- "ensemblID"
-TopFiveNames %<>% mutate(GeneSymbol = geneNames$hgnc_symbol[match(TopFiveNames$ensemblID, geneNames$ensembl_gene_id)],
-                         GeneType = geneNames$gene_biotype[match(TopFiveNames$ensemblID, geneNames$ensembl_gene_id)])
-
-TopFiveTable <- TopFiveNames %>% group_by(ensemblID) %>% summarise(n = n()) %>% data.frame() %>% arrange(desc(n))
-TopFiveTable %<>% mutate(GeneSymbol = geneNames$hgnc_symbol[match(TopFiveTable$ensemblID, geneNames$ensembl_gene_id)],
-                         GeneType = geneNames$gene_biotype[match(TopFiveTable$ensemblID, geneNames$ensembl_gene_id)])
-
-#Get the common genes with the highest count in all the samples (and the ribosomal gene..)
-CommonTopGenes <- TopFiveTable[TopFiveTable$n > 0.5*length(grep("SL", names(countMatrix))) | TopFiveTable$ensemblID == "ENSG00000226958",]
-CommonTopGenesSum <- apply(MitoCountFiltered %>% filter(genes %in% CommonTopGenes$ensemblID) %>% select(matches("SL")), 2, sum)
-TopFiveSum <- TopFiveProportionNoMT %>% group_by(Filename) %>%
-  summarise(TotProp = sum(Proportion)) %>%
-  data.frame %>% arrange(TotProp)
-
-if(length(list.files(path = paste0(name, "/data"), pattern = "isoforms")) > 0){ # When the data was proccessed from BAM/FASTQ files 
-  #Recreate CPM matrix after exclusion of mitochondrial genes and the top expressed genes
-  AllSampleData <- sapply(list.files(path = paste0(name, "/data"), pattern = "isoforms"), function(x) strsplit(x,"\\.")[[1]][1]) 
-  names(AllSampleData) <- AllSampleData
-  AllSampleData %<>% as.list
-  
-  AllSampleData <- mclapply(AllSampleData, function(smpl){
-    read.csv(paste0(name, "/data/", smpl, ".isoforms.results") , header = T, sep = "\t", quote = "")
-  }, mc.cores = 30)
-  
-  
-  #Get the effective lengths of the genes
-  GeneLengthList <- lapply(AllSampleData, function(smpl){
-    smpl %<>% mutate(WeighLength = effective_length*IsoPct/100)
-    smpl %>% group_by(gene_id) %>% summarise(geneLength = sum(WeighLength)) %>% data.frame
-  })
-  
-  GeneLengthDF <- sapply(names(GeneLengthList), function(x){
-    GeneLengthList[[x]][2]
-  }) %>% do.call(cbind, .) %>% data.frame
-  
-  
-  colnames(GeneLengthDF) <- sapply(colnames(GeneLengthDF), function(x) strsplit(x, "\\.gene")[[1]][1]) %>%
-    gsub("PEC_ASD_UCLA_.*_mRNA_HiSeq2.00_", "", .)
-  rownames(GeneLengthDF) <- levels(AllSampleData[[1]]$gene_id)
-  
-  
-  GeneSymbolAll <- data.frame(GeneSymbol = geneNames$hgnc_symbol[match(rownames(GeneLengthDF), geneNames$ensembl_gene_id)],
-                              Probe = geneNames$hgnc_symbol[match(rownames(GeneLengthDF), geneNames$ensembl_gene_id)],
-                              GeneType = geneNames$gene_biotype[match(rownames(GeneLengthDF), geneNames$ensembl_gene_id)],
-                              ensemblID = rownames(GeneLengthDF))
-  GeneLengthDF <- cbind(GeneSymbolAll, GeneLengthDF)
-  GeneLengthDF$SD <- apply(GeneLengthDF %>% select(matches("GSM|_")), 1, function(gene){
-    gene <- gene[gene > 0]
-    round(sd(gene), digits = 2)
-  })
-  GeneLengthDF$Max <-  apply(GeneLengthDF %>% select(matches("GSM|_")), 1, function(x){
-    max(x) 
-  })
-  
-  GeneLengthDF %<>% filter(!ensemblID %in% MitoGenes$ensembl_gene_id) %>% droplevels()
-  GeneLengthDF$GeneType <- as.character(GeneLengthDF$GeneType)
-  GeneLengthDF$GeneType[is.na(GeneLengthDF$GeneType)] <- "NotAnnotated"
-  GeneLengthDF$GeneType <- factor(GeneLengthDF$GeneType)
-  
-  #Identify short genes which are likely to correspond to non-coding genes. This is mostly for ribosomal depletion protocols
-  GenesRM <- GeneLengthDF[GeneLengthDF$Max < 150 & GeneLengthDF$Max > 0,] 
-  GeneRMType <- GenesRM %>% group_by(GeneType) %>% summarise(n = n()) %>% data.frame()
-  
-  GeneRMcount <- apply(MitoCountFiltered %>% filter(genes %in% as.character(GenesRM$ensemblID)) %>% select(matches("GSM|_")), 2, sum)
-  
-  GeneRMTypeCount <- sapply(GeneRMType$GeneType, function(type){
-    subGenesRM <- GenesRM %>% filter(GeneType == type) %>% droplevels() 
-    apply(MitoCountFiltered %>% filter(genes %in% as.character(subGenesRM$ensemblID)) %>% select(matches("GSM|_")), 2, sum)
-  }, simplify = FALSE)
-  names(GeneRMTypeCount) <- GeneRMType$GeneType
-  
-  GeneRMTypeCount %<>% do.call(rbind, .) %>% data.frame()
-  
-  GeneRMTypePercent <- sapply(1:length(CountSum), function(i){
-    Percent = 100*GeneRMTypeCount[,i]/(CountSum[i] - MitoCountSum[i])
-    sapply(Percent, function(x) round(x, digits = 2))
-  }, simplify = T) %>% data.frame
-  
-  names(GeneRMTypePercent) <- names(GeneRMTypeCount)
-  GeneRMTypePercent <- cbind(rownames(GeneRMTypeCount), GeneRMTypePercent)
-  names(GeneRMTypePercent)[1] <- "GeneType"
-  
-  #Repeat for all genes
-  GeneTypeTable <- GeneLengthDF %>% filter(Max > 0) %>% group_by(GeneType) %>% summarise(n = n()) %>% data.frame()
-  
-  GeneTypeCount <- sapply(GeneTypeTable$GeneType, function(type){
-    subGenes <- GeneLengthDF %>% filter(Max > 0, GeneType == type) 
-    apply(countMatrix %>% filter(genes %in% subGenes$ensemblID) %>% select(matches("GSM|_")), 2, sum)
-  }, simplify = FALSE)
-  
-  names(GeneTypeCount) <- GeneTypeTable$GeneType
-  
-  GeneTypeCount %<>% do.call(rbind, .) %>% data.frame()
-  
-  GeneTypeRatio <- sapply(1:length(CountSum), function(i){
-    Percent = GeneTypeCount[,i]/(CountSum[i] - MitoCountSum[i])
-    sapply(Percent, function(x) round(x, digits = 2))
-  }, simplify = T) %>% data.frame
-  
-  names(GeneTypeRatio) <- names(GeneTypeCount)
-  GeneTypeRatio <- cbind(rownames(GeneTypeCount), GeneTypeRatio)
-  names(GeneTypeRatio)[1] <- "GeneType"
-  
-  #Create filtered count matrix, after removal of the high impact genes and short reads (the effective library)
-  countMatrixFiltered <- MitoCountFiltered %>% filter(!genes %in% c(as.character(GenesRM$ensemblID), as.character(CommonTopGenes$ensemblID))) %>% droplevels()
-  EffectiveLibCount <- apply(countMatrixFiltered[,-1], 2, sum)
-  
-  #Get Proportion of differnt gene types
-  SummaryTable <- data.frame(Sample = names(CountSum),
-                             TotalCount = CountSum,
-                             MTgeneCount = MitoCountSum,
-                             TopGenesCount = CommonTopGenesSum,
-                             ShortLengthCount = GeneRMcount,
-                             EffectiveCount = EffectiveLibCount,
-                             ProtCoding = unlist(GeneTypeCount[rownames(GeneTypeCount) == "protein_coding",]))
-  
-  SummaryTable %<>% mutate(MT_Ratio = round(MTgeneCount/TotalCount, digits = 2),
-                           TopGenesRatioAll = round(TopGenesCount/TotalCount, digits = 2),
-                           TopGenesRatio = round(TopGenesCount/(TotalCount-MTgeneCount), digits = 2),
-                           ShortRatioAll = round(ShortLengthCount/TotalCount, digits = 2),
-                           ShortRatio = round(ShortLengthCount/(TotalCount-MTgeneCount), digits = 2),
-                           EffectiveRatioAll = round(EffectiveCount/TotalCount, digits = 2),
-                           EffectiveRatio = round(EffectiveCount/(TotalCount-MTgeneCount), digits = 2),
-                           ProtCodingRatioAll = round(ProtCoding/TotalCount, digits = 2),
-                           ProtCodingRatio = round(ProtCoding/(TotalCount - MTgeneCount), digits = 2))
-  
-  
-  temp <- melt(SummaryTable %>% select(matches("Sampl|MT_R|Ratio")), id.vars = "Sample", variable.name = "Type", value.name = "Proportion")
-  temp$Type <- factor(temp$Type, levels =  unique(c(grep("MT_Ratio|All", unique(temp$Type), value = T),
-                                                    grep("Ratio$", unique(temp$Type), value = T))))
-  temp$Group <- Metadata$Profile[match(as.character(temp$Sample), Metadata$Series_sample_id)]
-  temp$ReadsType <- sapply(as.character(temp$Type), function(x){
-    if(grepl("MT|All", x)){
-      "All Reads"
-    } else {
-      "MT reads excluded"
-    }
-  })
-  
-  levels(temp$Type) <- sapply(levels(temp$Type), function(x) gsub("Ratio|All", "", x))
-  levels(temp$Type) <- sapply(levels(temp$Type), function(x) gsub("Effective", "EffectiveLibrary", x))
-  levels(temp$Type) <- sapply(levels(temp$Type), function(x) gsub("MT_", "Mitochondrial", x))
-  
-  
-  ggplot(temp[!grepl("Eff|Prot", temp$Type),], aes(Type, Proportion)) +
-    theme_classic() +
-    labs(x = "", y = "Proportion of counts") + 
-    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-    geom_boxplot(outlier.shape =  NA) +
-    geom_jitter(width = 0.2, size = 1, aes(color = Group)) +
-    facet_wrap(~ReadsType, scales = "free")
-  
-  ggplot(temp[grepl("Eff|Prot", temp$Type),], aes(Type, Proportion)) +
-    theme_classic() +
-    labs(x = "", y = "Proportion of counts") + 
-    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-    geom_boxplot(outlier.shape =  NA) +
-    geom_jitter(width = 0.2, size = 1, aes(color = Group)) +
-    facet_wrap(~ReadsType, scales = "free")
-} else {
-  countMatrixFiltered <- MitoCountFiltered %>% filter(!genes %in% as.character(CommonTopGenes$ensemblID)) %>% droplevels()
-}
-
-#Create log2 CPM matrix after removal of mitochondria-encoded genes
-cpmMatrix <- Count2CPM(MitoCountFiltered[,-1]) %>% data.frame()
-cpmCountAsIs <- apply(cpmMatrix, 2, sum)
-cpmMatrix <- apply(cpmMatrix, c(1,2), function(x) log2(x+1)) %>% data.frame()
-cpmMatrix <- cbind(as.character(MitoCountFiltered$genes), cpmMatrix)
-colnames(cpmMatrix)[1] <- "genes"
-
-cpmCount <- apply(cpmMatrix[,-1], 2, sum)
-
-cpmMatrixFiltered <- cpmMatrix
-countMatrixFiltered <- MitoCountFiltered
-
-ZeroCount <- apply(cpmMatrixFiltered[-1], 1, function(x){
-  sum(as.numeric(x)==0)
-})
-
-cpmMatrixFiltered <- cpmMatrixFiltered[ZeroCount < 0.8*ncol(cpmMatrixFiltered),]
-rownames(cpmMatrixFiltered) <- cpmMatrixFiltered$genes
-
-countMatrixFiltered <- countMatrixFiltered[ZeroCount < 0.8*ncol(countMatrixFiltered),]
-rownames(countMatrixFiltered) <- countMatrixFiltered$genes
-
-#Add gene symbols
-GeneSymbolAll <- data.frame(GeneSymbol = geneNames$hgnc_symbol[match(rownames(cpmMatrixFiltered), geneNames$ensembl_gene_id)],
-                            Probe = rownames(cpmMatrixFiltered),
-                            ensemblID = rownames(cpmMatrixFiltered))
-
-
-ExpDataCPM <- cbind(GeneSymbolAll, cpmMatrixFiltered[-1])
-
-ExpDataCPM <- ExpDataCPM[!is.na(ExpDataCPM$GeneSymbol),]
-ExpDataCPM <- ExpDataCPM[!ExpDataCPM$GeneSymbol == "",]
-
-RegionData <- sapply(levels(Metadata$OrgRegion), function(region){
-  subMeta = Metadata %>% filter(OrgRegion == region)
-  Reps <- table(as.character(subMeta$CommonName))
-  subExp = ExpDataCPM %>% select_(.dots = c("GeneSymbol", "Probe", "ensemblID", as.character(subMeta$RNA2)))
-  #Remove replicates with the lower correlation to other samples
-  SbjCor <- cor(subExp %>% select(matches("SL")))
-  diag(SbjCor) <- NA
-  MedianCor <- apply(SbjCor, 2, function(x) median(x, na.rm = T)) %>% sort(decreasing = T)
-  SampleNames <- data.frame(FileName = names(MedianCor),
-                            CommonName = subMeta$CommonName[match(names(MedianCor), subMeta$RNA2)])
-  SampleRM <- SampleNames[duplicated(SampleNames$CommonName),]
-  
-  subMeta <- subMeta %>%  filter(!RNA2 %in% as.character(SampleRM$FileName))
-  
-  subExp <- subExp[,!names(subExp) %in% as.character(SampleRM$FileName)]
-  names(subExp)[-c(1:3)] <- subMeta$CommonName[match(names(subExp)[-c(1:3)], subMeta$RNA2)] %>% as.character()
-  
+CohortData <- sapply(levels(Metadata$cohort), function(Cohort){
+  subMeta = Metadata %>% filter(cohort == Cohort) %>% droplevels()
+  subExp = countMatrix %>% select(c("genes", as.character(subMeta$RNA2)))
+  names(subExp)[-1] <- subMeta$CommonName[match(names(subExp)[-1], subMeta$RNA2)] %>% as.character()
+  SbjCor <- cor(subExp %>% select(matches("_")))
+ 
   #Remove genes no variance
   VarGenes <- apply(subExp %>% select(matches("_")), 1, sd)
   subExp <- subExp[VarGenes > 0.01,]
-  
-  list(Metadata = subMeta, aned = subExp, SmplCor = SbjCor)
+  list(Metadata = subMeta, countMatrix = subExp)
 }, simplify = FALSE)
 
 
-studyFinal <- lapply(RegionData, function(region) {
-  Metadata = region$Metadata
-  aned = region$aned
+CohortData <- lapply(CohortData, function(Cohort){
+  countMatrix = Cohort$countMatrix
+  Metadata = Cohort$Metadata
+  CountSum <- apply(countMatrix %>% select(matches("_")), 2, sum)
+  
+  MitoCountSum <- apply(countMatrix %>% filter(genes %in% MitoGenes$ensembl_gene_id) %>% select(matches("_")), 2, sum)
+  
+  MitoCountFiltered <- countMatrix %>% filter(!genes %in% MitoGenes$ensembl_gene_id)
+  
+  MitoFiltCountSum = apply(MitoCountFiltered[-1], 2, sum)
+  
+  TopFiveProportion <- sapply(names(CountSum), function(sbj){
+    SubMatrix = countMatrix %>% select_(.dots = c("genes", sbj))
+    names(SubMatrix)[2] <- "Counts"
+    TopFive = SubMatrix %>% arrange(desc(Counts)) %>% head(5)
+    TopFive %<>%  mutate(Proportion = Counts/CountSum[sbj])
+    Genes <- geneNames[match(TopFive$genes, geneNames$ensembl_gene_id),]  %>% select(-ensembl_gene_id)
+    Genes$Filename = sbj
+    temp <- cbind(Genes, TopFive)
+    names(temp)[names(temp) == "genes"] <- "ensemblID"
+    temp
+  }, simplify = FALSE) %>% rbindlist()
+  
+  TopFiveProportionNoMT <- sapply(names(CountSum), function(sbj){
+    SubMatrix = MitoCountFiltered %>% select_(.dots = c("genes", sbj))
+    names(SubMatrix)[2] <- "Counts"
+    TopFive = SubMatrix %>% arrange(desc(Counts)) %>% head(5)
+    TopFive %<>%  mutate(Proportion = Counts/MitoFiltCountSum[sbj])
+    Genes <- geneNames[match(TopFive$genes, geneNames$ensembl_gene_id),] %>% select(-ensembl_gene_id)
+    Genes$Filename = sbj
+    temp <- cbind(Genes, TopFive)
+    names(temp)[names(temp) == "genes"] <- "ensemblID"
+    temp
+  }, simplify = FALSE) %>% rbindlist() %>% data.frame()
+  
+  TopFiveProportionNoMT <- merge(TopFiveProportionNoMT, geneNames, by.x = "ensemblID", by.y = "ensembl_gene_id", all.x = T, all.y = F)
+  
+  TopFiveSum <- TopFiveProportionNoMT %>% group_by(Filename) %>%
+    summarise(TotProp = sum(Proportion)) %>%
+    data.frame %>% arrange(TotProp)
+  
+  
+  TopFiveGeneFreq <- TopFiveProportionNoMT %>% group_by(ensemblID) %>%
+    summarise(n = n()) %>%
+    data.frame
+  
+  TopFiveGeneFreq %<>% mutate(ensemblID2 = paste0(ensemblID, " (", n, ")"))
+  TopFiveGeneFreq <- merge(TopFiveGeneFreq, geneNames[!duplicated(geneNames$ensembl_gene_id),], by.x = "ensemblID", by.y = "ensembl_gene_id", all.x = T, all.y = F)
+  TopFiveGeneFreq %<>% arrange(n)
+  
+  TopFiveProportionNoMT$ensemblID2 <- TopFiveGeneFreq$ensemblID2[match(TopFiveProportionNoMT$ensemblID, TopFiveGeneFreq$ensemblID)]
+  
+  TopFiveProportionNoMT$Filename <- factor(TopFiveProportionNoMT$Filename, levels = TopFiveSum$Filename)
+  TopFiveProportionNoMT$ensemblID2 <- factor(TopFiveProportionNoMT$ensemblID2, levels = rev(as.character(TopFiveGeneFreq$ensemblID2)))
+  
+  Plot <- ggplot(TopFiveProportionNoMT, aes(Filename, Proportion, fill = ensemblID2)) +
+    theme_classic(base_size = 16) +
+    theme(axis.text.x = element_blank()) +
+    labs(y = "Proportion of reads", x = "Sample", title = "Top five genes with the highest read count") + 
+    scale_fill_manual(values = c("brown1", "goldenrod3", "aquamarine4",
+                                 "darkred", "cornflowerblue", "darksalmon", gray.colors(6)),
+                      name = "GeneID (n)") +
+    geom_bar(stat = "identity")
+  print(Plot)  
+  
+  #Get the top expressed genes in each sample and the sum of their counts
+  TopGenes <- sapply(grep("_", names(MitoCountFiltered), value = T), function(smpl){
+    TopFive <- MitoCountFiltered %>% arrange_(.dots = smpl) %>% tail(5)
+    TopFive %<>% select_(.dots = c("genes", smpl))
+    names(TopFive)[2] <- "Counts"
+    TopFive %>% arrange(desc(Counts))
+  }, simplify = FALSE)
+  
+  TopFiveCount <- lapply(TopGenes, function(smpl){
+    sum(smpl$Counts)
+  }) %>% unlist
+  
+  TopFiveNames <- lapply(TopGenes, function(smpl){
+    smpl$genes %>% as.character
+  }) %>% unlist %>% data.frame()
+  
+  names(TopFiveNames) <- "ensemblID"
+  TopFiveNames %<>% mutate(GeneSymbol = geneNames$hgnc_symbol[match(TopFiveNames$ensemblID, geneNames$ensembl_gene_id)],
+                           GeneType = geneNames$gene_biotype[match(TopFiveNames$ensemblID, geneNames$ensembl_gene_id)])
+  
+  TopFiveTable <- TopFiveNames %>% group_by(ensemblID) %>% summarise(n = n()) %>% data.frame() %>% arrange(desc(n))
+  TopFiveTable %<>% mutate(GeneSymbol = geneNames$hgnc_symbol[match(TopFiveTable$ensemblID, geneNames$ensembl_gene_id)],
+                           GeneType = geneNames$gene_biotype[match(TopFiveTable$ensemblID, geneNames$ensembl_gene_id)])
+  
+  #Get the common genes with the highest count in all the samples (and the ribosomal gene..)
+  CommonTopGenes <- TopFiveTable[TopFiveTable$n > 0.5*length(grep("_", names(countMatrix))) | TopFiveTable$ensemblID == "ENSG00000226958",]
+  CommonTopGenesSum <- apply(MitoCountFiltered %>% filter(genes %in% CommonTopGenes$ensemblID) %>% select(matches("_")), 2, sum)
+  TopFiveSum <- TopFiveProportionNoMT %>% group_by(Filename) %>%
+    summarise(TotProp = sum(Proportion)) %>%
+    data.frame %>% arrange(TotProp)
+  
+  countMatrixFiltered <- MitoCountFiltered %>% filter(!genes %in% as.character(CommonTopGenes$ensemblID)) %>% droplevels()
+  ZeroCount <- apply(countMatrixFiltered[-1], 1, function(x){
+    sum(as.numeric(x)==0)
+  })
+  
+  countMatrixFiltered <- countMatrixFiltered[ZeroCount < 0.8*ncol(countMatrixFiltered),]
+  rownames(countMatrixFiltered) <- countMatrixFiltered$genes
+  #Create log2 CPM matrix after removal of mitochondria-encoded genes
+  cpmMatrixFiltered <- Count2CPM(countMatrixFiltered[,-1]) %>% data.frame()
+  cpmMatrixFiltered <- apply(cpmMatrixFiltered, c(1,2), function(x) log2(x+1)) %>% data.frame()
+  cpmMatrixFiltered <- cbind(as.character(countMatrixFiltered$genes), cpmMatrixFiltered)
+  colnames(cpmMatrixFiltered)[1] <- "genes"
+  
+  cpmCountFiltered <- apply(cpmMatrixFiltered[,-1], 2, sum)
+  
+  #Add gene symbols
+  GeneSymbolAll <- data.frame(GeneSymbol = geneNames$hgnc_symbol[match(rownames(cpmMatrixFiltered), geneNames$ensembl_gene_id)],
+                              Probe = rownames(cpmMatrixFiltered),
+                              ensemblID = rownames(cpmMatrixFiltered))
+  
+  
+  ExpDataCPM <- cbind(GeneSymbolAll, cpmMatrixFiltered[-1])
+  
+  ExpDataCPM <- ExpDataCPM[!is.na(ExpDataCPM$GeneSymbol),]
+  ExpDataCPM <- ExpDataCPM[!ExpDataCPM$GeneSymbol == "",]
+  
+  #Remove duplicated gene symbols
+  ExpDataCPM %<>% arrange(desc(.[,4]))
+  
+  ExpDataCPM %<>% filter(!duplicated(GeneSymbol))
+  
+  list(Metadata = Metadata, aned = ExpDataCPM, SmplCor = Cohort$SbjCor, countMatrix = countMatrixFiltered)
+})
+
+
+studyFinal <- lapply(CohortData, function(Cohort) {
+  Metadata = Cohort$Metadata
+  Metadata$age_years <- as.numeric(Metadata$age_years)
+  Metadata$PMI_hours <- as.numeric(Metadata$pm_time_min)/60
+  Metadata$Batch <- factor(Metadata$Batch)
+  aned = Cohort$aned
+  RunComBat = FALSE
   source(paste0(GenScriptPath, "pre-proccessRNAseq.R"), local=T)
   output <- list(aned_high, aned_good, aned_low, MaxNoise,
                  exclude_samples_low, exclude_samples_high, exclude_samples, Metadata_org, Metadata)
@@ -376,9 +219,9 @@ studyFinal <- lapply(RegionData, function(region) {
 })
 
 
-studyFinal <- lapply(studyFinal, function(regData) {
-  regData$Metadata <- GeneSex(regData$aned_good, Metadata=regData$Metadata)
-  return(regData)
+studyFinal <- lapply(studyFinal, function(cohData) {
+  cohData$Metadata <- GeneSex(cohData$aned_good, Metadata=cohData$Metadata)
+  return(cohData)
 })
 
 missmatched <- lapply(studyFinal, function(x){
@@ -396,9 +239,6 @@ missmatched <- lapply(studyFinal, function(x){
 
 #Create gender HeatMaps
 datas <- datasGenerate(c("XIST", "KDM5D", "RPS4Y1"))
-
-HeatMapGen2(datas=datas, Meta=Metadata[!duplicated(Metadata$CommonName),], path = resultsPath, missmatched=missmatched, save=1)
-
 
 #Estimating cell type proportions
 source(paste0(GenScriptPath, "Cell_type_PCA.R"))
@@ -462,17 +302,28 @@ PCA_resultsMean <- lapply(PCA_results, function(region){
 for(study in names(studyFinal)){
   studyFinal[[study]]$Metadata %<>% select(-matches("_Genes"))
   estimates <- lapply(PCA_resultsMean[[study]], function(cells){
-    temp <- cells$MeanRot
-    names(temp) <- cells$CommonName
+    temp <- cells %>% select(MeanRot)
+    rownames(temp) <- cells$CommonName
     temp
-  }) %>% List2df
+  }) %>% do.call(cbind, .)
+  names(estimates) <- names(PCA_resultsMean[[study]])
   studyFinal[[study]]$Metadata <- merge(studyFinal[[study]]$Metadata,
                                         estimates,
                                         by.x="CommonName",
                                         by.y="row.names",
-                                        all.x=TRUE)
+                                        all.x=TRUE,
+                                        sort = F)
   studyFinal[[study]]$Metadata$Profile <- as.factor(studyFinal[[study]]$Metadata$Profile)
   studyFinal[[study]]$Metadata$Profile <- relevel(studyFinal[[study]]$Metadata$Profile, ref="Cont")
+}
+
+#Add the count matrix, remove outlier samples and low expressed genes based on previous steps
+for(Cohort in names(studyFinal)){
+  temp <-CohortData[[Cohort]]$countMatrix
+  temp <- temp[temp$genes %in% studyFinal[[Cohort]]$aned_high$ensemblID,]
+  temp[,-1] <- apply(temp[-1], c(1, 2), function(x) as.integer(round(x, digits = 0)))
+  temp %<>% select("genes", grep("_", names(studyFinal[[Cohort]]$aned_high), value = T))
+  studyFinal[[Cohort]]$countMatrix <- temp 
 }
 
 #Print MGP plots
@@ -502,11 +353,10 @@ save.image(paste0(GeneralResultsPath, name, ".RData"))
 save(studyFinal, file = paste0(GeneralResultsPath, "studyFinal", name, ".rda"))
 save(PCA_results, file = paste0(GeneralResultsPath, "PCAresults", name, ".Rda"))
 
-ggplot(studyFinal$Cortex$Metadata, aes(Profile, Oligo_Genes)) +
+ggplot(studyFinal$Norway$Metadata, aes(Profile,Oligo_Genes)) +
   theme_classic() +
-  geom_boxplot(outlier.shape = NA) +
-  geom_jitter(width = 0.2) +
-  facet_wrap(~cohort)
+  geom_boxplot() +
+  geom_jitter(width = 0.2)
 
 #Run DE analysis
 source(paste0(ProjScriptPath, "DESeqAnalysis.R"))
